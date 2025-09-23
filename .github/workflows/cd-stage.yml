@@ -1,0 +1,118 @@
+# camille-sit722/.github/workflows/ci-test.yml
+
+name: Stage 2 CD Pipeline - Deployment to Staging Environment 
+
+# Trigger the workflow only when stage 1 i.e. ci-test.yml is successful on the 'testing' branch
+on:
+  workflow_run:
+    workflows: ["Stage 1 CI Pipeline - Test and Push Images to ACR"]
+    types: [completed]
+
+# Global environment variables that can be used across jobs
+env:
+  # ACR Login Server (e.g., myregistry.azurecr.io)
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}  
+  # To adopt ci-test tags 
+  IMAGE_TAG: latest
+
+jobs:
+  # Job: Deployment to staging environment 
+  deploy_staging:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: staging
+
+  steps: 
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Azure login using a Service Principal secret
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    # Set AKS 
+    - name: Set AKS context
+      uses: azure/aks-set-context@v4
+      with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+
+    # Create namespace i.e. staging-run.id and the relevant baseline manifests
+    - name: Create 'staging' namespace
+      id: ns
+      run: |
+          NS="staging-${{ github.run_id }}"
+          echo "ns=$NS" >> "$GITHUB_OUTPUT"
+          kubectl create namespace "$NS"
+
+    # Apply all Kubernetes 
+    - name: Apply ConfigMaps & Secrets
+      run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl apply -n "$NS" -f k8s/configmaps.yaml
+          kubectl apply -n "$NS" -f k8s/secrets.yaml
+          kubectl apply -n "$NS" -f k8s/rabbitmq.yaml
+          kubectl apply -n "$NS" -f k8s/product-db.yaml
+          kubectl apply -n "$NS" -f k8s/order-db.yaml
+          kubectl apply -n "$NS" -f k8s/customer-db.yaml
+
+    - name: Deploy services (Product / Order / Customer)
+      run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl apply -n "$NS" -f k8s/product-service.yaml
+          kubectl apply -n "$NS" -f k8s/order-service.yaml
+          kubectl apply -n "$NS" -f k8s/customer-service.yaml
+
+    - name: Deploy frontend
+      run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl apply -n "$NS" -f k8s/frontend.yaml
+
+    # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
+    - name: Wait for DBs & RabbitMQ ready
+      run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl -n "$NS" rollout status deploy/product-db-deployment-w10d2   --timeout=180s
+          kubectl -n "$NS" rollout status deploy/order-db-deployment-w10d2     --timeout=180s
+          kubectl -n "$NS" rollout status deploy/customer-db-deployment-w10d2  --timeout=180s
+          kubectl -n "$NS" rollout status deploy/rabbitmq-deployment-w10d2     --timeout=180s
+
+
+    - name: Wait for services ready
+      run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl -n "$NS" rollout status deploy/product-service-w10d2   --timeout=180s
+          kubectl -n "$NS" rollout status deploy/order-service-w10d2     --timeout=180s
+          kubectl -n "$NS" rollout status deploy/customer-service-w10d2  --timeout=180s
+          kubectl -n "$NS" rollout status deploy/frontend                --timeout=180s
+
+    # Conduct an acceptance test i.e. smoke test
+    - name: Run acceptance test
+      run: |
+          kubectl -n $STAGING_NAMESPACE run smoke --rm -i --restart=Never \
+            --image=curlimages/curl:8.8.0 -- \
+            sh -eu -c '
+            # Return 200 for successful health checks, if not the job will fail 
+              check_200 () {
+                url="$1"; name="$2";
+                code=$(curl -sS -o /dev/null -w "%{http_code}" "$url" || true)
+                if [ "$code" != "200" ]; then
+                  echo "[FAIL] $name: expected 200, got $code ($url)"
+                  exit 1
+                fi
+                echo "[OK] $name -> 200"
+              }
+
+              # Basic health checks
+              check_200 http://product-service-w10d2:8000/health   "product-service /health"
+              check_200 http://order-service-w10d2:8001/health     "order-service /health"
+              check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
+            '
+
+    # Destroy temporary namespace
+    - name: Destroy temporary namespace
+      if: always()
+      run: |
+            kubectl delete namespace "${{ steps.ns.outputs.ns }}" --wait=false
