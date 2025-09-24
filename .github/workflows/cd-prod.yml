@@ -21,83 +21,82 @@ env:
 jobs:
   # Job: Deployment to production environment 
   deploy_prod:
-    if: github.event.pull_request.merged == true 
+    if: ${{ github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
     environment: production
+    steps: 
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  steps: 
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # Azure login using a Service Principal secret
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    # Azure login using a Service Principal secret
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # Set AKS 
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+            resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+            cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
-    # Set AKS 
-    - name: Set AKS context
-      uses: azure/aks-set-context@v4
-      with:
-          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
-          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+      - name: Ensure 'prod' namespace exists
+        run: |
+          kubectl create namespace $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Ensure 'prod' namespace exists
-      run: |
-        kubectl create namespace $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+      # Apply all Kubernetes 
+      - name: Apply ConfigMaps & Secrets (prod)
+        run: |
+          kubectl apply -n $PROD_NAMESPACE -f k8s/configmaps.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/secrets.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/rabbitmq.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/product-db.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/order-db.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/customer-db.yaml
 
-    # Apply all Kubernetes 
-    - name: Apply ConfigMaps & Secrets (prod)
-      run: |
-        kubectl apply -n $PROD_NAMESPACE -f k8s/configmaps.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/secrets.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/rabbitmq.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/product-db.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/order-db.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/customer-db.yaml
+      - name: Deploy backend services (prod)
+        run: |
+          kubectl apply -n $PROD_NAMESPACE -f k8s/product-service.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/order-service.yaml
+          kubectl apply -n $PROD_NAMESPACE -f k8s/customer-service.yaml
 
-    - name: Deploy backend services (prod)
-      run: |
-        kubectl apply -n $PROD_NAMESPACE -f k8s/product-service.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/order-service.yaml
-        kubectl apply -n $PROD_NAMESPACE -f k8s/customer-service.yaml
+      - name: Deploy frontend (prod)
+        run: |
+          kubectl apply -n $PROD_NAMESPACE -f k8s/frontend.yaml
 
-    - name: Deploy frontend (prod)
-      run: |
-        kubectl apply -n $PROD_NAMESPACE -f k8s/frontend.yaml
+      # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
+      - name: Wait for DBs & RabbitMQ (prod)
+        run: |
+          kubectl -n $PROD_NAMESPACE rollout status deploy/product-db-deployment-w10d2 --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/order-db-deployment-w10d2   --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/customer-db-deployment-w10d2 --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/rabbitmq-deployment-w10d2  --timeout=180s
 
-    # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
-    - name: Wait for DBs & RabbitMQ (prod)
-      run: |
-        kubectl -n $PROD_NAMESPACE rollout status deploy/product-db-deployment-w10d2 --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/order-db-deployment-w10d2   --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/customer-db-deployment-w10d2 --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/rabbitmq-deployment-w10d2  --timeout=180s
+      - name: Wait for services (prod)
+        run: |
+          kubectl -n $PROD_NAMESPACE rollout status deploy/product-service-w10d2  --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/order-service-w10d2    --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/customer-service-w10d2 --timeout=180s
+          kubectl -n $PROD_NAMESPACE rollout status deploy/frontend               --timeout=180s
 
-    - name: Wait for services (prod)
-      run: |
-        kubectl -n $PROD_NAMESPACE rollout status deploy/product-service-w10d2  --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/order-service-w10d2    --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/customer-service-w10d2 --timeout=180s
-        kubectl -n $PROD_NAMESPACE rollout status deploy/frontend               --timeout=180s
-
-    # Conduct a smoke test
-    - name: Smoke test 
-      run: |
-        kubectl -n "$PROD_NAMESPACE" run smoke --rm -i --restart=Never \
-          --image=curlimages/curl:8.8.0 -- \
-          sh -eu -c '
-            set -euo pipefail
-            check_200 () {
-              url="$1"; name="$2";
-              code=$(curl -sS -o /dev/null -w "%{http_code}" "$url" || true)
-              if [ "$code" != "200" ]; then
-                echo "[FAIL] $name: expected 200, got $code ($url)"
-                exit 1
-              fi
-              echo "[OK] $name -> 200"
-            }
-            check_200 http://product-service-w10d2:8000/health   "product-service /health"
-            check_200 http://order-service-w10d2:8001/health     "order-service /health"
-            check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
-         '
+      # Conduct a smoke test
+      - name: Smoke test 
+        run: |
+          kubectl -n "$PROD_NAMESPACE" run smoke --rm -i --restart=Never \
+            --image=curlimages/curl:8.8.0 -- \
+            sh -eu -c '
+              set -euo pipefail
+              check_200 () {
+                url="$1"; name="$2";
+                code=$(curl -sS -o /dev/null -w "%{http_code}" "$url" || true)
+                if [ "$code" != "200" ]; then
+                  echo "[FAIL] $name: expected 200, got $code ($url)"
+                  exit 1
+                fi
+                echo "[OK] $name -> 200"
+              }
+              check_200 http://product-service-w10d2:8000/health   "product-service /health"
+              check_200 http://order-service-w10d2:8001/health     "order-service /health"
+              check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
+          '
