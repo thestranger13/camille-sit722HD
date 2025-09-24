@@ -1,23 +1,26 @@
-# .github/workflows/aks-debug.yml
-name: AKS Debug (one-off)
+name: Stage 2 Debug (manual deploy to staging-like env)
 
 on:
   workflow_dispatch:
     inputs:
-      namespace:
-        description: ""
+      ref:
+        description: "Git ref to deploy (branch/sha). Leave blank for default."
         required: false
         default: ""
 
 env:
+  # Keep in sync with your Stage 2
   SERVICES: "product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend"
 
 jobs:
-  debug:
+  stage2_debug:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout (for k8s manifests reference, optional)
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
 
       - name: Azure Login
         uses: azure/login@v1
@@ -30,82 +33,131 @@ jobs:
           resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
           cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
 
-      - name: Resolve namespace
+      - name: Create debug namespace
         id: ns
-        shell: bash
         run: |
-          NS="${{ github.event.inputs.namespace }}"
-          if [ -z "$NS" ]; then
-            # pick latest created staging-* namespace
-            NS=$(kubectl get ns \
-              --no-headers \
-              -o custom-columns='NAME:.metadata.name,CREATED:.metadata.creationTimestamp' \
-              | awk '$1 ~ /^staging-/ {print $0}' \
-              | sort -k2,2 | tail -n1 | awk '{print $1}')
-          fi
-          if [ -z "$NS" ]; then
-            echo "No staging-* namespace found and none provided." >&2
-            exit 1
-          fi
+          NS="staging-debug-${{ github.run_id }}"
           echo "ns=$NS" >> "$GITHUB_OUTPUT"
           echo "Using namespace: $NS"
+          kubectl create namespace "$NS"
 
-      - name: Show basic objects
+      - name: Apply ConfigMaps & Secrets
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          echo "=== Namespaces ==="
-          kubectl get ns
-          echo
-          echo "=== Deployments ($NS) ==="
-          kubectl -n "$NS" get deploy -o wide
-          echo
-          echo "=== Pods ($NS) ==="
-          kubectl -n "$NS" get pods -o wide
-          echo
-          echo "=== Services ($NS) ==="
-          kubectl -n "$NS" get svc -o wide
+          kubectl apply -n "$NS" -f k8s/configmaps.yaml
+          kubectl apply -n "$NS" -f k8s/secrets.yaml
 
-      - name: Describe deployments of interest
+      - name: Apply data plane (RabbitMQ + DBs)
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          for d in $SERVICES; do
-            echo "===== DESCRIBE deploy/$d ====="
-            kubectl -n "$NS" describe deploy "$d" || true
-            echo
-          done
+          kubectl apply -n "$NS" -f k8s/rabbitmq.yaml
+          kubectl apply -n "$NS" -f k8s/product-db.yaml
+          kubectl apply -n "$NS" -f k8s/order-db.yaml
+          kubectl apply -n "$NS" -f k8s/customer-db.yaml
 
-      - name: Describe pods (labels per service)
+      - name: Apply services (Product/Order/Customer) & Frontend
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          for app in product-service order-service customer-service frontend; do
-            echo "===== DESCRIBE pods app=$app ====="
-            kubectl -n "$NS" describe pod -l app="$app" || true
-            echo
-          done
+          kubectl apply -n "$NS" -f k8s/product-service.yaml
+          kubectl apply -n "$NS" -f k8s/order-service.yaml
+          kubectl apply -n "$NS" -f k8s/customer-service.yaml
+          kubectl apply -n "$NS" -f k8s/frontend.yaml
 
-      - name: Pod logs (first pod per service)
+      - name: Wait for DBs & RabbitMQ
+        shell: bash
         run: |
+          set -e
           NS="${{ steps.ns.outputs.ns }}"
-          # Map deployment -> container name (adjust if yours differ)
-          declare -A C
-          C[product-service-w10d2]=product-service-container
-          C[order-service-w10d2]=order-service-container
-          C[customer-service-w10d2]=customer-service-container
-          C[frontend]=frontend-container
+          kubectl -n "$NS" rollout status deploy/product-db-deployment-w10d2 --timeout=180s
+          kubectl -n "$NS" rollout status deploy/order-db-deployment-w10d2   --timeout=180s
+          kubectl -n "$NS" rollout status deploy/customer-db-deployment-w10d2 --timeout=180s
+          kubectl -n "$NS" rollout status deploy/rabbitmq-deployment-w10d2  --timeout=180s
 
-          for d in $SERVICES; do
-            echo "===== LOGS for $d ====="
-            POD=$(kubectl -n "$NS" get pod -l app=${d%-w10d2} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$POD" ]; then
-              kubectl -n "$NS" logs "$POD" -c "${C[$d]}" --tail=200 || true
-            else
-              echo "No pod found for label app=${d%-w10d2}"
+      - name: Wait for services (with diagnostics on failure)
+        shell: bash
+        run: |
+          set +e
+          NS="${{ steps.ns.outputs.ns }}"
+          FAIL=0
+
+          wait_one () {
+            local d="$1"
+            echo "Waiting for $d ..."
+            if ! kubectl -n "$NS" rollout status deploy/$d --timeout=240s; then
+              echo "::warning::Rollout timed out for $d"
+              FAIL=1
             fi
-            echo
-          done
+          }
 
-      - name: Recent events
+          wait_one product-service-w10d2
+          wait_one order-service-w10d2
+          wait_one customer-service-w10d2
+          wait_one frontend
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "=== BASIC LISTS ==="
+            kubectl -n "$NS" get deploy -o wide
+            kubectl -n "$NS" get pods -o wide
+            kubectl -n "$NS" get svc -o wide
+
+            echo "=== DESCRIBE DEPLOYMENTS ==="
+            for d in product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend; do
+              echo "----- deploy/$d -----"
+              kubectl -n "$NS" describe deploy "$d" || true
+              echo
+            done
+
+            echo "=== DESCRIBE PODS BY LABEL ==="
+            for a in product-service order-service customer-service frontend; do
+              echo "----- app=$a -----"
+              kubectl -n "$NS" describe pod -l app="$a" || true
+              echo
+            done
+
+            echo "=== POD LOGS (first pod per service) ==="
+            declare -A C
+            C[product-service-w10d2]=product-service-container
+            C[order-service-w10d2]=order-service-container
+            C[customer-service-w10d2]=customer-service-container
+            C[frontend]=frontend-container
+
+            for d in product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend; do
+              APP="${d%-w10d2}"
+              POD=$(kubectl -n "$NS" get pod -l app="$APP" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+              echo "----- logs for $d (pod: $POD) -----"
+              if [ -n "$POD" ]; then
+                kubectl -n "$NS" logs "$POD" -c "${C[$d]}" --tail=200 || true
+              else
+                echo "No pod found for $APP"
+              fi
+              echo
+            done
+
+            echo "=== RECENT EVENTS ==="
+            kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -n 200 || true
+
+            echo "::error::One or more deployments failed to roll out"
+            exit 1
+          fi
+
+      - name: Smoke check (optional)
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          echo "===== EVENTS ($NS) ====="
-          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -n 200 || true
+          kubectl -n "$NS" run smoke --rm -i --restart=Never --image=curlimages/curl:8.8.0 -- \
+            sh -eu -c '
+              check_200 () {
+                url="$1"; name="$2";
+                code=$(curl -fsS -o /dev/null -w "%{http_code}" "$url" || true)
+                if [ "$code" != "200" ]; then
+                  echo "[FAIL] $name: expected 200, got $code ($url)"
+                  exit 1
+                fi
+                echo "[OK] $name -> 200"
+              }
+              check_200 http://product-service-w10d2:8000/health   "product-service /health"
+              check_200 http://order-service-w10d2:8001/health     "order-service /health"
+              check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
+            '
+
+      - name: Keep namespace for investigation
+        run: echo "Namespace kept: ${{ steps.ns.outputs.ns }}"
