@@ -1,0 +1,111 @@
+# .github/workflows/aks-debug.yml
+name: AKS Debug (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: ""
+        required: false
+        default: ""
+
+env:
+  SERVICES: "product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend"
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for k8s manifests reference, optional)
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+
+      - name: Resolve namespace
+        id: ns
+        shell: bash
+        run: |
+          NS="${{ github.event.inputs.namespace }}"
+          if [ -z "$NS" ]; then
+            # pick latest created staging-* namespace
+            NS=$(kubectl get ns \
+              --no-headers \
+              -o custom-columns='NAME:.metadata.name,CREATED:.metadata.creationTimestamp' \
+              | awk '$1 ~ /^staging-/ {print $0}' \
+              | sort -k2,2 | tail -n1 | awk '{print $1}')
+          fi
+          if [ -z "$NS" ]; then
+            echo "No staging-* namespace found and none provided." >&2
+            exit 1
+          fi
+          echo "ns=$NS" >> "$GITHUB_OUTPUT"
+          echo "Using namespace: $NS"
+
+      - name: Show basic objects
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          echo "=== Namespaces ==="
+          kubectl get ns
+          echo
+          echo "=== Deployments ($NS) ==="
+          kubectl -n "$NS" get deploy -o wide
+          echo
+          echo "=== Pods ($NS) ==="
+          kubectl -n "$NS" get pods -o wide
+          echo
+          echo "=== Services ($NS) ==="
+          kubectl -n "$NS" get svc -o wide
+
+      - name: Describe deployments of interest
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          for d in $SERVICES; do
+            echo "===== DESCRIBE deploy/$d ====="
+            kubectl -n "$NS" describe deploy "$d" || true
+            echo
+          done
+
+      - name: Describe pods (labels per service)
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          for app in product-service order-service customer-service frontend; do
+            echo "===== DESCRIBE pods app=$app ====="
+            kubectl -n "$NS" describe pod -l app="$app" || true
+            echo
+          done
+
+      - name: Pod logs (first pod per service)
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          # Map deployment -> container name (adjust if yours differ)
+          declare -A C
+          C[product-service-w10d2]=product-service-container
+          C[order-service-w10d2]=order-service-container
+          C[customer-service-w10d2]=customer-service-container
+          C[frontend]=frontend-container
+
+          for d in $SERVICES; do
+            echo "===== LOGS for $d ====="
+            POD=$(kubectl -n "$NS" get pod -l app=${d%-w10d2} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$POD" ]; then
+              kubectl -n "$NS" logs "$POD" -c "${C[$d]}" --tail=200 || true
+            else
+              echo "No pod found for label app=${d%-w10d2}"
+            fi
+            echo
+          done
+
+      - name: Recent events
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          echo "===== EVENTS ($NS) ====="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -n 200 || true
