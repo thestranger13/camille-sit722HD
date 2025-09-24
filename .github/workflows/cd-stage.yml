@@ -98,17 +98,6 @@ jobs:
             kubectl -n "$NS" rollout status deploy/customer-service-w10d2  --timeout=240s
             kubectl -n "$NS" rollout status deploy/frontend                --timeout=240s
 
-      # DELETE LATER 
-      - name: Show resolved images
-        if: always()
-        run: |
-          NS="${{ steps.ns.outputs.ns }}"
-          for d in product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend; do
-            IMG=$(kubectl -n "$NS" get deploy "$d" -o jsonpath='{.spec.template.spec.containers[0].image}')
-            echo "$d -> $IMG"
-          done
-          kubectl -n "$NS" get pods -o wide
-
       # Conduct an acceptance test i.e. smoke test
       - name: Run acceptance test
         run: |
