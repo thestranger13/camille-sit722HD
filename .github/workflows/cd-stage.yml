@@ -72,6 +72,15 @@ jobs:
             NS="${{ steps.ns.outputs.ns }}"
             kubectl apply -n "$NS" -f k8s/frontend.yaml
 
+      - name: Ensure set to images in ACR
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          ACR="${{ env.ACR_LOGIN_SERVER }}"
+          kubectl -n "$NS" set image deploy/product-service-w10d2  product-service-container=$ACR/product_service:latest
+          kubectl -n "$NS" set image deploy/order-service-w10d2    order-service-container=$ACR/order_service:latest
+          kubectl -n "$NS" set image deploy/customer-service-w10d2 customer-service-container=$ACR/customer_service:latest
+          kubectl -n "$NS" set image deploy/frontend               frontend-container=$ACR/frontend:latest
+
       # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
       - name: Wait for DBs & RabbitMQ ready
         run: |
@@ -80,7 +89,6 @@ jobs:
             kubectl -n "$NS" rollout status deploy/order-db-deployment-w10d2     --timeout=180s
             kubectl -n "$NS" rollout status deploy/customer-db-deployment-w10d2  --timeout=180s
             kubectl -n "$NS" rollout status deploy/rabbitmq-deployment-w10d2     --timeout=180s
-
 
       - name: Wait for services ready
         run: |
