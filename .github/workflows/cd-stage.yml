@@ -24,6 +24,9 @@ jobs:
     steps: 
       - name: Checkout repository
         uses: actions/checkout@v4
+        # Use the same commit that triggered Stage 1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       # Azure login using a Service Principal secret
       - name: Azure Login

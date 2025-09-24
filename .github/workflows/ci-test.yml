@@ -2,7 +2,7 @@
 
 name: Stage 1 CI Pipeline - Test and Push Images to ACR
 
-# Trigger the workflow only when code is pushed to 'testing' branch - testing this now 
+# Trigger the workflow only when code is pushed to 'testing' branch
 on:
   push:
     branches:
