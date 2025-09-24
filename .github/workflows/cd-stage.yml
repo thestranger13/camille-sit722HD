@@ -72,6 +72,15 @@ jobs:
             NS="${{ steps.ns.outputs.ns }}"
             kubectl apply -n "$NS" -f k8s/frontend.yaml
 
+      - name: Ensure set to images in ACR
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          ACR="${{ env.ACR_LOGIN_SERVER }}"
+          kubectl -n "$NS" set image deploy/product-service-w10d2  product-service-container=$ACR/product_service:latest
+          kubectl -n "$NS" set image deploy/order-service-w10d2    order-service-container=$ACR/order_service:latest
+          kubectl -n "$NS" set image deploy/customer-service-w10d2 customer-service-container=$ACR/customer_service:latest
+          kubectl -n "$NS" set image deploy/frontend               frontend-container=$ACR/frontend:latest
+
       # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
       - name: Wait for DBs & RabbitMQ ready
         run: |
@@ -81,7 +90,6 @@ jobs:
             kubectl -n "$NS" rollout status deploy/customer-db-deployment-w10d2  --timeout=180s
             kubectl -n "$NS" rollout status deploy/rabbitmq-deployment-w10d2     --timeout=180s
 
-
       - name: Wait for services ready
         run: |
             NS="${{ steps.ns.outputs.ns }}"
@@ -89,6 +97,17 @@ jobs:
             kubectl -n "$NS" rollout status deploy/order-service-w10d2     --timeout=240s
             kubectl -n "$NS" rollout status deploy/customer-service-w10d2  --timeout=240s
             kubectl -n "$NS" rollout status deploy/frontend                --timeout=240s
+
+      # DELETE LATER 
+      - name: Show resolved images
+        if: always()
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          for d in product-service-w10d2 order-service-w10d2 customer-service-w10d2 frontend; do
+            IMG=$(kubectl -n "$NS" get deploy "$d" -o jsonpath='{.spec.template.spec.containers[0].image}')
+            echo "$d -> $IMG"
+          done
+          kubectl -n "$NS" get pods -o wide
 
       # Conduct an acceptance test i.e. smoke test
       - name: Run acceptance test
