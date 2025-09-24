@@ -11,7 +11,7 @@ on:
 # Global environment variables that can be used across jobs
 env:
   # ACR Login Server (e.g., myregistry.azurecr.io)
-  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}  
+  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}  
   # To adopt ci-test tags 
   IMAGE_TAG: latest
 
@@ -24,6 +24,9 @@ jobs:
     steps: 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
 
       # Azure login using a Service Principal secret
       - name: Azure Login
@@ -82,10 +85,10 @@ jobs:
       - name: Wait for services ready
         run: |
             NS="${{ steps.ns.outputs.ns }}"
-            kubectl -n "$NS" rollout status deploy/product-service-w10d2   --timeout=180s
-            kubectl -n "$NS" rollout status deploy/order-service-w10d2     --timeout=180s
-            kubectl -n "$NS" rollout status deploy/customer-service-w10d2  --timeout=180s
-            kubectl -n "$NS" rollout status deploy/frontend                --timeout=180s
+            kubectl -n "$NS" rollout status deploy/product-service-w10d2   --timeout=240s
+            kubectl -n "$NS" rollout status deploy/order-service-w10d2     --timeout=240s
+            kubectl -n "$NS" rollout status deploy/customer-service-w10d2  --timeout=240s
+            kubectl -n "$NS" rollout status deploy/frontend                --timeout=240s
 
       # Conduct an acceptance test i.e. smoke test
       - name: Run acceptance test
