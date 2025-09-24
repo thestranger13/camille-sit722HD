@@ -11,9 +11,7 @@ on:
 # Global environment variables that can be used across jobs
 env:
   # ACR Login Server (e.g., myregistry.azurecr.io)
-  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-  ACR_USERNAME: ${{ secrets.ACR_USERNAME }}       
-  ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}         
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}      
   # This provides unique, traceable tags for each image build
   IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
 
@@ -175,26 +173,26 @@ jobs:
     # Build and Push Docker image for Product Service
     - name: Build and Push Product Service Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/product_service:latest ./backend/product_service/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/product_service:latest
+        docker build -t ${{ vars.ACR_LOGIN_SERVER }}/product_service:latest ./backend/product_service/
+        docker push ${{ vars.ACR_LOGIN_SERVER }}/product_service:latest
 
     # Build and Push Docker image for Order Service
     - name: Build and Push Order Service Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/order_service:latest ./backend/order_service/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/order_service:latest
+        docker build -t ${{ vars.ACR_LOGIN_SERVER }}/order_service:latest ./backend/order_service/
+        docker push ${{ vars.ACR_LOGIN_SERVER }}/order_service:latest
 
     # Build and Push Docker image for Customer Service
     - name: Build and Push Customer Service Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/customer_service:latest ./backend/customer_service/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/customer_service:latest
+        docker build -t ${{ vars.ACR_LOGIN_SERVER }}/customer_service:latest ./backend/customer_service/
+        docker push ${{ vars.ACR_LOGIN_SERVER }}/customer_service:latest
 
     # Build and Push Docker image for Frontend 
     - name: Build and Push Frontend Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/frontend:latest ./frontend/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/frontend:latest
+        docker build -t ${{ vars.ACR_LOGIN_SERVER }}/frontend:latest ./frontend/
+        docker push ${{ vars.ACR_LOGIN_SERVER }}/frontend:latest
 
     # Logout from Azure for security (runs even if image push fails)
     - name: Logout from Azure

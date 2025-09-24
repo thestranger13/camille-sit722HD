@@ -1,4 +1,4 @@
-# camille-sit722/.github/workflows/ci-test.yml
+# camille-sit722/.github/workflows/cd-stage.yml
 
 name: Stage 2 CD Pipeline - Deployment to Staging Environment 
 
@@ -35,8 +35,8 @@ jobs:
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
-            resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
-            cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+            resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+            cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
 
       # Create namespace i.e. staging-run.id and the relevant baseline manifests
       - name: Create 'staging' namespace
@@ -91,7 +91,7 @@ jobs:
       - name: Run acceptance test
         run: |
             NS="${{ steps.ns.outputs.ns }}"
-            kubectl -n $STAGING_NAMESPACE run smoke --rm -i --restart=Never \
+            kubectl -n "$NS" run smoke --rm -i --restart=Never \
               --image=curlimages/curl:8.8.0 -- \
               sh -eu -c '
               # Return 200 for successful health checks, if not the job will fail 
