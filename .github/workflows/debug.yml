@@ -1,4 +1,5 @@
-name: Stage 2 Debug (manual deploy to staging-like env)
+# camille-sit722/.github/workflows/debug.yml
+name: Stage 2 Debug 
 
 on:
   workflow_dispatch:
@@ -160,4 +161,4 @@ jobs:
             '
 
       - name: Keep namespace for investigation
-        run: echo "Namespace kept: ${{ steps.ns.outputs.ns }}"
+        run: echo "Namespace kept ${{ steps.ns.outputs.ns }}"
