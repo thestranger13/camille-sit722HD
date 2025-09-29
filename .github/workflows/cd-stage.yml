@@ -141,11 +141,13 @@ jobs:
         run: |
           NS="${{ steps.ns.outputs.ns }}"
           for i in $(seq 1 30); do
-            IP=$(kubectl -n "$NS" get svc frontend-w10d2 \
-              -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            IP=$(kubectl -n "$NS" get svc frontend-w10d2 -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
             if [ -n "$IP" ]; then
               echo "Frontend LB: $IP"
+              # make it available to future steps
               echo "FRONTEND_LB_HOST=$IP" >> "$GITHUB_ENV"
+              # and also to THIS step
+              export FRONTEND_LB_HOST="$IP"
               break
             fi
             echo "Waiting for LB external address... ($i/30)"
@@ -156,8 +158,9 @@ jobs:
             exit 1
           fi
 
+          # use the local IP for testing
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "http://${FRONTEND_LB_HOST}" || echo 000)
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://$IP" || echo 000)
             echo "Attempt $i: HTTP $code"
             if [ "$code" = "200" ] || [ "$code" = "301" ] || [ "$code" = "302" ] || [ "$code" = "403" ]; then
               break
@@ -165,13 +168,18 @@ jobs:
             sleep 5
           done
           echo "Final check:"
-          curl -sS -I "http://${FRONTEND_LB_HOST}" || true
+          curl -sS -I "http://$IP" || true
 
       # 7. Run DAST on live application (OWASP ZAP baseline scan)
       - name: Run DAST using ZAP  
         run: |
-          docker run --rm -v "$PWD:/zap/wrk" owasp/zap2docker-stable \
-            zap-baseline.py -t "http://${FRONTEND_LB_HOST}" \
+          test -n "${FRONTEND_LB_HOST:-}" || { echo "FRONTEND_LB_HOST not set"; exit 1; }
+
+          docker run --rm \
+            -v "$PWD:/zap/wrk" \
+            zaproxy/zap-stable \
+            zap-baseline.py \
+              -t "http://${FRONTEND_LB_HOST}" \
               -m 0 -I \
               -J /zap/wrk/zap.json \
               -r /zap/wrk/zap.html \
