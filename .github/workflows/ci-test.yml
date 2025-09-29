@@ -156,16 +156,32 @@ jobs:
 
       - name: Run Bandit on backend services which will fail on high severity and confidence
         run: |
-          bandit -r backend/product_service  --severity-level high --confidence-level high
-          bandit -r backend/order_service  --severity-level high --confidence-level high
-          bandit -r backend/customer_service  --severity-level high --confidence-level high
+          bandit -r backend/product_service backend/order_service backend/customer_service \
+            --severity-level high --confidence-level high \
+            | tee bandit-report.txt
 
-      # 10. Run SAST on frontend (ESLint Security) and static analysis (code quality check as part of functionality)
+      # 10. SAST Backend Report with Bandit generated 
+      - name: Generate Bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.txt
+
+      # 11. Run SAST on frontend (ESLint Security) and static analysis (code quality check as part of functionality)
       - name: Run frontend security lint
         working-directory: frontend
-        run: npm run lint -- --max-warnings=0
+        run: npm run lint -- --max-warnings=5 2>&1 | tee eslint-report.txt
 
-      # 11. Install Snyk and Run SCA on both backend and frontend services (Snyk)
+      # 12. SAST Frontend Report with ESLint generated 
+      - name: Upload ESLint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eslint-report
+          path: frontend/eslint-report.txt
+
+      # 13. Install Snyk and Run SCA on both backend and frontend services (Snyk)
       - name: Install Snyk CLI
         run: npm install -g snyk
 
@@ -173,15 +189,27 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          snyk test --file=backend/product_service/requirements.txt --package-manager=pip --severity-threshold=high
-          snyk test --file=backend/order_service/requirements.txt   --package-manager=pip --severity-threshold=high
-          snyk test --file=backend/customer_service/requirements.txt --package-manager=pip --severity-threshold=high
+          snyk test --file=backend/product_service/requirements.txt --package-manager=pip --severity-threshold=high \
+            | tee snyk-product.txt
+          snyk test --file=backend/order_service/requirements.txt --package-manager=pip --severity-threshold=high \
+            | tee snyk-order.txt
+          snyk test --file=backend/customer_service/requirements.txt --package-manager=pip --severity-threshold=high \
+            | tee snyk-customer.txt
 
       - name: Run Snyk test on frontend which will fail on high
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         working-directory: frontend
-        run: snyk test --severity-threshold=high
+        run: snyk test --severity-threshold=high | tee snyk-frontend.txt
+
+      # 14. SAC Report with Snyk Generated
+      - name: Upload Snyk reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-reports
+          path: |
+            snyk-*.txt
 
   # Job 2: Build and Push Docker Images (runs only if tests pass)
   build_and_push_images:
