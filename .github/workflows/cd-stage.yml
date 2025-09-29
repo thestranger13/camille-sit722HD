@@ -140,25 +140,53 @@ jobs:
       - name: Run ZAP Baseline scan (DAST)
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          # Clean any previous job (re-runs)
+
+          # Clean old pod 
           kubectl -n "$NS" delete job zap-baseline --ignore-not-found
 
-          # Create a one-shot job that runs the ZAP baseline scan
-          kubectl -n "$NS" create job zap-baseline \
-            --image=owasp/zap2docker-stable \
-            -- /bin/sh -lc 'zap-baseline.py -t http://frontend-w10d2:80 \
-              -m 5 -I -J /zap/wrk/zap.json -r /zap/wrk/zap.html'
+          # Create a one-shot Job for ZAP
+          cat <<'EOF' | kubectl -n "$NS" apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: zap-baseline
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: zap
+                  image: owasp/zap2docker-stable
+                  args:
+                    - zap-baseline.py
+                    - -t
+                    - http://frontend-w10d2
+                    - -m
+                    - "5"
+                    - -I
+                    - -J
+                    - /zap/wrk/zap.json
+                    - -r
+                    - /zap/wrk/zap.html
+          EOF
 
-          # Wait for the Job to finish 
-          kubectl -n "$NS" wait --for=condition=Complete job/zap-baseline --timeout=15m
+          # Wait until the Job completes with a longer timeout 
+          kubectl -n "$NS" wait --for=condition=complete job/zap-baseline --timeout=1200s || true
 
-          # Obtain the pod name 
-          POD=$(kubectl -n "$NS" get pods -l job-name=zap-baseline -o jsonpath="{.items[0].metadata.name}")
-          echo "ZAP pod: $POD"
+          # Show pod name & logs for troubleshooting
+          kubectl -n "$NS" get pods -l job-name=zap-baseline -o wide || true
+          POD=$(kubectl -n "$NS" get pods -l job-name=zap-baseline -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
+          echo "ZAP pod: ${POD:-<not found>}"
+          if [ -n "$POD" ]; then
+            echo "---- ZAP LOGS ----"
+            kubectl -n "$NS" logs "$POD" || true
 
-          # Copy reports from the pod
-          kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
-          kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
+          # Copy reports
+          if [ -n "$POD" ]; then
+            kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
+            kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
+          fi
           
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
