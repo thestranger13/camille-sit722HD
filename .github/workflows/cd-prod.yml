@@ -28,13 +28,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Azure login using a Service Principal secret
+      # 1. Azure login using a Service Principal secret
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Set AKS 
+      # 2. Set AKS 
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
@@ -45,7 +45,7 @@ jobs:
         run: |
           kubectl create namespace $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-      # Apply all Kubernetes 
+      # 3. Apply all Kubernetes 
       - name: Apply ConfigMaps & Secrets (prod)
         run: |
           kubectl apply -n $PROD_NAMESPACE -f k8s/configmaps.yaml
@@ -65,7 +65,7 @@ jobs:
         run: |
           kubectl apply -n $PROD_NAMESPACE -f k8s/frontend.yaml
 
-      # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
+      # 4. Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
       - name: Wait for DBs & RabbitMQ (prod)
         run: |
           kubectl -n $PROD_NAMESPACE rollout status deploy/product-db-deployment-w10d2 --timeout=180s
@@ -94,7 +94,7 @@ jobs:
             done
           done
 
-      # Conduct a smoke test
+      # 5. Conduct a smoke test
       - name: Smoke test 
         run: |
           kubectl -n "$PROD_NAMESPACE" run smoke --rm -i --restart=Never \

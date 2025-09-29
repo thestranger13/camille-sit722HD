@@ -11,7 +11,7 @@ on:
 # Global environment variables that can be used across jobs
 env:
   # ACR Login Server (e.g., myregistry.azurecr.io)
-  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}      
+  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}      
   # This provides unique, traceable tags for each image build
   IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
 
@@ -144,12 +144,44 @@ jobs:
         with:
           node-version: '18'   
 
-      # 8. Install frontend dependencies and run static analysis
-      - name: Run frontend static analysis
+      # 8. Install frontend dependencies
+      - name: Install frontend dependencies
         working-directory: frontend
         run: |
           npm ci          
-          npm run lint   
+
+      # 9. Install Bandit and Run SAST on backend services (Bandit)
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit on backend services which will fail on high severity and confidence
+        run: |
+          bandit -r backend/product_service  --severity-level high --confidence-level high
+          bandit -r backend/order_service  --severity-level high --confidence-level high
+          bandit -r backend/customer_service  --severity-level high --confidence-level high
+
+      # 10. Run SAST on frontend (ESLint Security) and static analysis (code quality check as part of functionality)
+      - name: Run frontend security lint
+        working-directory: frontend
+        run: npm run lint -- --max-warnings=0
+
+      # 11. Set up Snyk and Run SCA on both backend and frontend services (Snyk)
+      - name: Set up Snyk
+        uses: snyk/actions/setup@v4
+
+      - name: Run Snyk test on backend services which will fail on high
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test --file=backend/product_service/requirements.txt --package-manager=pip --severity-threshold=high
+          snyk test --file=backend/order_service/requirements.txt   --package-manager=pip --severity-threshold=high
+          snyk test --file=backend/customer_service/requirements.txt --package-manager=pip --severity-threshold=high
+
+      - name: Run Snyk test on frontend which will fail on high
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        working-directory: frontend
+        run: snyk test --severity-threshold=high
 
   # Job 2: Build and Push Docker Images (runs only if tests pass)
   build_and_push_images:

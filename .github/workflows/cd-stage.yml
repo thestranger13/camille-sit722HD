@@ -27,21 +27,20 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-
-      # Azure login using a Service Principal secret
+      # 1. Azure login using a Service Principal secret
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Set AKS 
+      # 2. Set AKS 
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
             resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
             cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
 
-      # Create namespace i.e. staging-run.id and the relevant baseline manifests
+      # 3. Create namespace i.e. staging-run.id and the relevant baseline manifests
       - name: Create 'staging' namespace
         id: ns
         run: |
@@ -49,7 +48,7 @@ jobs:
             echo "ns=$NS" >> "$GITHUB_OUTPUT"
             kubectl create namespace "$NS"
 
-      # Apply all Kubernetes 
+      # 4. Apply all Kubernetes 
       - name: Apply ConfigMaps & Secrets
         run: |
             NS="${{ steps.ns.outputs.ns }}"
@@ -81,7 +80,7 @@ jobs:
           kubectl -n "$NS" set image deploy/customer-service-w10d2 customer-service-container=$ACR/customer_service:latest
           kubectl -n "$NS" set image deploy/frontend               frontend-container=$ACR/frontend:latest
 
-      # Wait for the DBs, RabbiqMQ and services to be ready with a timeout 
+      # 5. Wait for the DBs, RabbitMQ and services to be ready with a timeout 
       - name: Wait for DBs & RabbitMQ ready
         run: |
             NS="${{ steps.ns.outputs.ns }}"
@@ -113,7 +112,7 @@ jobs:
               done
             done
 
-      # Conduct an acceptance test i.e. smoke test
+      # 6. Conduct an acceptance test i.e. smoke test
       - name: Run acceptance test
         run: |
             NS="${{ steps.ns.outputs.ns }}"
@@ -137,7 +136,43 @@ jobs:
                 check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
               '
 
-      # Destroy temporary namespace
+      # 7. Run DAST on live application (OWASP ZAP baseline scan)
+      - name: Run ZAP Baseline scan (DAST)
+        run: |
+          NS="${{ steps.ns.outputs.ns }}"
+          # Run ZAP container as a pod and scan the frontend Service
+          kubectl -n "$NS" run zap-baseline --image=owasp/zap2docker-stable --restart=Never -- \
+          + zap-baseline.py -t http://frontend-w10d2:80 \
+              -m 5 \
+              -I \
+              -J /zap/wrk/zap.json \
+              -r /zap/wrk/zap.html
+
+          # Copy reports
+          sleep 20
+          kubectl -n "$NS" cp zap-baseline:/zap/wrk/zap.json ./zap.json || true
+          kubectl -n "$NS" cp zap-baseline:/zap/wrk/zap.html ./zap.html || true
+
+      # DAST to fail on any high alerts
+      - name: Fail if any High alerts
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y jq
+          COUNT=$(jq '[.site[].alerts[] | select(.risk=="High")] | length' ./zap.json 2>/dev/null || echo 0)
+          echo "ZAP High alerts: $COUNT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "❌ Failing due to $COUNT High alerts"
+            exit 1
+          fi
+
+      # Upload HTML report for user viewing 
+      - name: Upload ZAP HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: ./zap.html
+
+      # 8. Destroy temporary namespace
       - name: Destroy temporary namespace
         if: always()
         run: |
