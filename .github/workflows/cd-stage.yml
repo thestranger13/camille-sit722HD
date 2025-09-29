@@ -204,8 +204,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zap-report
-          path: ./zap.html
-                ./zap.json
+          path: ./zap.*
 
       # 9. Destroy temporary namespace
       - name: Destroy temporary namespace
