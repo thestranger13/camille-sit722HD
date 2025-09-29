@@ -160,11 +160,11 @@ jobs:
           COUNT=$(jq '[.site[].alerts[] | select(.risk=="High")] | length' ./zap.json 2>/dev/null || echo 0)
           echo "ZAP High alerts: $COUNT"
           if [ "$COUNT" -gt 0 ]; then
-            echo "❌ Failing due to $COUNT High alerts"
+            echo "Fail due to $COUNT High alerts"
             exit 1
           fi
 
-      # Upload HTML report for user viewing 
+      # 8. DAST Report with ZAP Generated 
       - name: Upload ZAP HTML report
         if: always()
         uses: actions/upload-artifact@v4
@@ -172,7 +172,7 @@ jobs:
           name: zap-report
           path: ./zap.html
 
-      # 8. Destroy temporary namespace
+      # 9. Destroy temporary namespace
       - name: Destroy temporary namespace
         if: always()
         run: |
