@@ -140,22 +140,26 @@ jobs:
       - name: Run ZAP Baseline scan (DAST)
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          # Run ZAP container as a pod and scan the frontend Service
-          kubectl -n "$NS" run zap-baseline --image=owasp/zap2docker-stable --restart=Never -- \
-            zap-baseline.py -t http://frontend-w10d2:80 \
-              -m 5 \
-              -I \
-              -J /zap/wrk/zap.json \
-              -r /zap/wrk/zap.html
+          # Clean any previous job (re-runs)
+          kubectl -n "$NS" delete job zap-baseline --ignore-not-found
 
-          # Wait for ZAP pod to be ready 
-          kubectl -n "$NS" wait --for=condition=Ready pod/zap-baseline --timeout=120s
+          # Create a one-shot job that runs the ZAP baseline scan
+          kubectl -n "$NS" create job zap-baseline \
+            --image=owasp/zap2docker-stable \
+            -- /bin/sh -lc 'zap-baseline.py -t http://frontend-w10d2:80 \
+              -m 5 -I -J /zap/wrk/zap.json -r /zap/wrk/zap.html'
 
-          # Copy reports
-          sleep 20
-          kubectl -n "$NS" cp zap-baseline:/zap/wrk/zap.json ./zap.json || true
-          kubectl -n "$NS" cp zap-baseline:/zap/wrk/zap.html ./zap.html || true
+          # Wait for the Job to finish 
+          kubectl -n "$NS" wait --for=condition=Complete job/zap-baseline --timeout=15m
 
+          # Obtain the pod name 
+          POD=$(kubectl -n "$NS" get pods -l job-name=zap-baseline -o jsonpath="{.items[0].metadata.name}")
+          echo "ZAP pod: $POD"
+
+          # Copy reports from the pod
+          kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
+          kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
+          
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
         run: |
