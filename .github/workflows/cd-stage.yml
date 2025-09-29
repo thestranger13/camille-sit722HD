@@ -140,11 +140,8 @@ jobs:
       - name: Run ZAP Baseline scan (DAST)
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-
-          # Clean old pod 
           kubectl -n "$NS" delete job zap-baseline --ignore-not-found
 
-          # Create a one-shot Job for ZAP
           cat <<'EOF' | kubectl -n "$NS" apply -f -
           apiVersion: batch/v1
           kind: Job
@@ -163,30 +160,22 @@ jobs:
                     - -t
                     - http://frontend-w10d2
                     - -m
-                    - "5"
-                    - -I
+                    - "0"               
+                    - -I                 
                     - -J
                     - /zap/wrk/zap.json
                     - -r
                     - /zap/wrk/zap.html
           EOF
 
-          # Wait until the Job completes with a longer timeout 
-          kubectl -n "$NS" wait --for=condition=complete job/zap-baseline --timeout=1200s || true
+          # wait for the completion of the job 
+          kubectl -n "$NS" wait --for=condition=complete job/zap-baseline --timeout=8m || true
 
-          # Show pod name & logs for troubleshooting
-          kubectl -n "$NS" get pods -l job-name=zap-baseline -o wide || true
+          # display the logs and copy the report 
           POD=$(kubectl -n "$NS" get pods -l job-name=zap-baseline -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
-          echo "ZAP pod: ${POD:-<not found>}"
-          if [ -n "$POD" ]; then
-            echo "---- ZAP LOGS ----"
-            kubectl -n "$NS" logs "$POD" || true
-
-          # Copy reports
-          if [ -n "$POD" ]; then
-            kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
-            kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
-          fi
+          [ -n "$POD" ] && kubectl -n "$NS" logs "$POD" --tail=200 || true
+          [ -n "$POD" ] && kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
+          [ -n "$POD" ] && kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
           
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
@@ -211,4 +200,4 @@ jobs:
       - name: Destroy temporary namespace
         if: always()
         run: |
-              kubectl delete namespace "${{ steps.ns.outputs.ns }}" --wait=false
+          kubectl delete namespace "${{ steps.ns.outputs.ns }}" --wait=false
