@@ -173,39 +173,40 @@ jobs:
       # 7. Run DAST on live application (OWASP ZAP baseline scan)
       - name: Run DAST using ZAP  
         run: |
+          set -euxo pipefail
           test -n "${FRONTEND_LB_HOST:-}" || { echo "FRONTEND_LB_HOST not set"; exit 1; }
+          mkdir -p reports
 
           docker run --rm \
             --user 0 \
             -w /zap/wrk \
-            -v "$PWD:/zap/wrk" \
+            -v "$PWD/reports:/zap/wrk/reports:rw" \
             zaproxy/zap-stable \
             zap-baseline.py \
               -t "http://${FRONTEND_LB_HOST}" \
               -m 0 -I \
-              -J zap.json \
-              -r zap.html \
-              -z "-config ajaxSpider.enable=false -config spider.maxDuration=0" 
+              -J reports/zap.json \
+              -r reports/zap.html \
+              -z "-config ajaxSpider.enable=false -config spider.maxDuration=0"
           
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
         run: |
           sudo apt-get update -y && sudo apt-get install -y jq
-          COUNT=$(jq '[.site[].alerts[] | select(.risk=="High")] | length' ./zap.json 2>/dev/null || echo 0)
+          COUNT=$(jq '[.site[].alerts[] | select(.risk=="High")] | length' reports/zap.json 2>/dev/null || echo 0)
           echo "ZAP High alerts: $COUNT"
           if [ "$COUNT" -gt 0 ]; then
             echo "Fail due to $COUNT High alerts"
             exit 1
           fi
-
+          
       # 8. DAST Report with ZAP Generated 
-      - name: Upload ZAP HTML report
+      - name: Upload ZAP artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: zap-report
-          path: ./zap.html
-                ./zap.json
+          path: reports/
 
       # 9. Destroy temporary namespace
       - name: Destroy temporary namespace
