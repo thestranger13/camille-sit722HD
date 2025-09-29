@@ -1,5 +1,4 @@
 # camille-sit722/.github/workflows/cd-prod.yml
-# security testing implementation 
 
 name: Stage 3 CD Pipeline - Deployment to Production 
 
