@@ -142,11 +142,14 @@ jobs:
           NS="${{ steps.ns.outputs.ns }}"
           # Run ZAP container as a pod and scan the frontend Service
           kubectl -n "$NS" run zap-baseline --image=owasp/zap2docker-stable --restart=Never -- \
-          + zap-baseline.py -t http://frontend-w10d2:80 \
+            zap-baseline.py -t http://frontend-w10d2:80 \
               -m 5 \
               -I \
               -J /zap/wrk/zap.json \
               -r /zap/wrk/zap.html
+
+          # Wait for ZAP pod to be ready 
+          kubectl -n "$NS" wait --for=condition=Ready pod/zap-baseline --timeout=120s
 
           # Copy reports
           sleep 20
