@@ -136,46 +136,29 @@ jobs:
                 check_200 http://customer-service-w10d2:8002/health  "customer-service /health"
               '
 
-      # 7. Run DAST on live application (OWASP ZAP baseline scan)
-      - name: Run ZAP Baseline scan (DAST)
+      # Obtain frontend address for DAST scan 
+      - name: Obtain frontend address
         run: |
           NS="${{ steps.ns.outputs.ns }}"
-          kubectl -n "$NS" delete job zap-baseline --ignore-not-found
+          for i in {1..30}; do
+            host=$(kubectl -n "$NS" get svc frontend-w10d2 \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$host" ]; then
+              echo "FRONTEND_LB_HOST=$host" >> $GITHUB_ENV
+              echo "Frontend LB: $host"
+              break
+            fi
+            echo "Waiting for LB external address... ($i/30)"; sleep 10
+          done
+          [ -z "${host}" ] && echo "No LB address assigned" && exit 1
 
-          cat <<'EOF' | kubectl -n "$NS" apply -f -
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: zap-baseline
-          spec:
-            backoffLimit: 0
-            template:
-              spec:
-                restartPolicy: Never
-                containers:
-                - name: zap
-                  image: owasp/zap2docker-stable
-                  args:
-                    - zap-baseline.py
-                    - -t
-                    - http://frontend-w10d2
-                    - -m
-                    - "0"               
-                    - -I                 
-                    - -J
-                    - /zap/wrk/zap.json
-                    - -r
-                    - /zap/wrk/zap.html
-          EOF
-
-          # wait for the completion of the job 
-          kubectl -n "$NS" wait --for=condition=complete job/zap-baseline --timeout=8m || true
-
-          # display the logs and copy the report 
-          POD=$(kubectl -n "$NS" get pods -l job-name=zap-baseline -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
-          [ -n "$POD" ] && kubectl -n "$NS" logs "$POD" --tail=200 || true
-          [ -n "$POD" ] && kubectl -n "$NS" cp "$POD":/zap/wrk/zap.json ./zap.json || true
-          [ -n "$POD" ] && kubectl -n "$NS" cp "$POD":/zap/wrk/zap.html ./zap.html || true
+      # 7. Run DAST on live application (OWASP ZAP baseline scan)
+      - name: Run DAST using ZAP  
+        run: |
+          docker run --rm -v "$PWD:/zap/wrk" owasp/zap2docker-stable \
+            zap-baseline.py -t "http://${FRONTEND_LB_HOST}" \
+              -m 0 -I -J /zap/wrk/zap.json -r /zap/wrk/zap.html \
+              -z "-config ajaxSpider.enable=false -config spider.maxDuration=0"
           
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
