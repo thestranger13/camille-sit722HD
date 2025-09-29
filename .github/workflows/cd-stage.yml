@@ -176,14 +176,16 @@ jobs:
           test -n "${FRONTEND_LB_HOST:-}" || { echo "FRONTEND_LB_HOST not set"; exit 1; }
 
           docker run --rm \
+            --user 0 \
+            -w /zap/wrk \
             -v "$PWD:/zap/wrk" \
             zaproxy/zap-stable \
             zap-baseline.py \
               -t "http://${FRONTEND_LB_HOST}" \
               -m 0 -I \
-              -J /zap/wrk/zap.json \
-              -r /zap/wrk/zap.html \
-              -z "-config ajaxSpider.enable=false -config spider.maxDuration=0"
+              -J zap.json \
+              -r zap.html \
+              -z "-config ajaxSpider.enable=false -config spider.maxDuration=0" 
           
       # DAST to fail on any high alerts
       - name: Fail if any High alerts
@@ -203,6 +205,7 @@ jobs:
         with:
           name: zap-report
           path: ./zap.html
+                ./zap.json
 
       # 9. Destroy temporary namespace
       - name: Destroy temporary namespace
